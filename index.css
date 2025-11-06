@@ -17,6 +17,9 @@
   --color-danger: #FF453A;
 
   --color-border: #38383A;
+  
+  --muscle-colors: #0A84FF, #30D158, #FF9F0A, #FF453A, #AF52DE, #5E5CE6, #64D2FF, #FFD60A, #A2845E;
+
 
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --border-radius-main: 16px;
@@ -94,6 +97,21 @@ body {
 }
 .block-info h3 { font-size: 1.1rem; }
 .block-info p { font-size: 0.9rem; color: var(--color-text-secondary); }
+
+.tabs { display: flex; justify-content: space-between; margin-top: 1.5rem; border-bottom: 1px solid var(--color-border); }
+.tab {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.2s ease;
+  flex-grow: 1;
+  border-bottom: 3px solid transparent;
+}
+.tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
 
 
 /* --- Muscle Heatmap --- */
@@ -222,10 +240,16 @@ h4 { font-size: 1.1rem; }
     padding: 1rem;
     border: 1px solid var(--color-border);
 }
+.stat-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
 .stat-card h3 {
     font-size: 1.1rem;
     font-weight: 600;
-    margin-bottom: 1rem;
+    margin-bottom: 0;
 }
 
 .segmented-control {
@@ -233,7 +257,12 @@ h4 { font-size: 1.1rem; }
     background-color: var(--color-surface-light);
     border-radius: var(--border-radius-inner);
     padding: 4px;
+}
+.segmented-control.main-filter {
     width: 100%;
+}
+.segmented-control.granularity-filter {
+    padding: 2px;
 }
 .segmented-control button {
     flex: 1;
@@ -246,6 +275,10 @@ h4 { font-size: 1.1rem; }
     cursor: pointer;
     border-radius: 9px;
     transition: all 0.2s ease-in-out;
+}
+.segmented-control.granularity-filter button {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.8rem;
 }
 .segmented-control button.active {
     background-color: var(--color-surface);
@@ -269,7 +302,7 @@ h4 { font-size: 1.1rem; }
 .streak-day .day-circle.trained { background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light)); }
 
 .anatomy-container { position: relative; }
-.anatomy-toggle { position: absolute; top: -5px; right: -5px; background: var(--color-surface-light); border: 1px solid var(--color-border); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.anatomy-toggle { position: absolute; top: -5px; right: -5px; background: var(--color-surface-light); border: 1px solid var(--color-border); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 10;}
 .anatomy-toggle .icon { width: 20px; height: 20px; }
 .anatomy-chart { display: flex; justify-content: center; }
 .anatomy-view svg { max-width: 180px; width: 100%; height: auto; }
@@ -335,6 +368,7 @@ h4 { font-size: 1.1rem; }
     stroke: var(--color-background);
     stroke-width: 2;
     cursor: pointer;
+    transition: r 0.2s;
 }
 .progression-chart-svg .data-point:hover {
     r: 5;
@@ -351,11 +385,39 @@ h4 { font-size: 1.1rem; }
     opacity: 0;
     transition: opacity 0.2s;
     white-space: nowrap;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    border: 1px solid var(--color-border);
 }
 .chart-tooltip.visible {
     opacity: 1;
 }
 
+/* NEW: Muscle Volume Trend Chart */
+.muscle-trend-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+.legend-item.inactive {
+    color: var(--color-text-secondary);
+    opacity: 0.6;
+}
+.legend-color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
 
 .empty-stat { background: var(--color-surface); color: var(--color-text-secondary); padding: 2rem; text-align: center; border-radius: var(--border-radius-main); }
 .empty-stat-small { font-size: 0.9rem; color: var(--color-text-secondary); text-align: center; padding: 1rem 0; }
