@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -114,11 +115,14 @@ const generateMockHistory = () => {
                         const newSubExo = {...subExo};
                         const numSets = newSubExo.sets;
                         const targetReps = parseInt((newSubExo.reps || '8').split('-')[0]);
+                        // Ensure progression is defined before accessing its properties
+                        const progressionIncrement = (newSubExo.progression && newSubExo.progression.increment) ? newSubExo.progression.increment : 2.5;
+                        const startWeight = newSubExo.startWeight !== undefined ? newSubExo.startWeight : 0; // Fallback for startWeight
+                        
                         newSubExo.sets = Array.from({ length: numSets }, (_, i) => {
-                            const increment = (newSubExo.progression && newSubExo.progression.increment) ? newSubExo.progression.increment : 2.5;
-                            const weight = newSubExo.startWeight + (week * increment * 0.75);
+                            const weight = startWeight + (week * progressionIncrement * 0.75);
                             return {
-                                id: `${newSubExo.id}-${i}`,
+                                id: `${newSubExo.id}-${i}-${Date.now()}-${Math.random()}`, // Unique ID for each set
                                 weight: Math.round(weight * 4) / 4,
                                 reps: targetReps + Math.floor(Math.random() * 3) - 1,
                                 rir: Math.floor(Math.random() * 2) + 1,
@@ -129,11 +133,15 @@ const generateMockHistory = () => {
                     };
 
                     if (exo.type === 'superset') {
-                        exo.exercises = exo.exercises.map(processExo);
+                        // For supersets, map exercises within the superset
+                        return { 
+                            ...exo, 
+                            exercises: exo.exercises.map(processExo) 
+                        };
                     } else {
+                        // For regular exercises
                         return processExo(exo);
                     }
-                    return exo;
                 })
             };
             mockHistory[dateString] = completedWorkout;
@@ -196,31 +204,110 @@ const useWorkoutHistory = () => {
         return best;
     }, [history]);
 
-    const getSuggestedWeight = useCallback((exercise) => {
-        const historyEntries = Object.values(history).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        for (const entry of historyEntries) {
-            if (!entry?.exercises) continue;
-            for (const performedExo of entry.exercises) {
-                const checkExo = (exo) => {
-                    if (exo.id === exercise.id && exo.sets?.length > 0) {
-                        const lastSet = exo.sets[exo.sets.length - 1];
-                        if (lastSet?.completed) {
-                            const targetReps = parseInt((exercise.reps || "0").split('-').pop() || "0");
-                            if (parseInt(String(lastSet.reps)) >= targetReps && parseInt(String(lastSet.rir)) >= (exercise.rir || 1)) {
-                                return parseFloat(String(lastSet.weight)) + (exercise.progression?.increment || 0);
+    const getBestSetVolume = useCallback((exerciseId) => {
+        let bestVolume = 0;
+        Object.values(history).forEach(workout => {
+            if (!workout?.exercises) return;
+            workout.exercises.forEach(exo => {
+                const processExo = (subExo) => {
+                    if (subExo.id === exerciseId) {
+                        (subExo.sets || []).forEach(set => {
+                            if (set.completed) {
+                                const volume = (parseFloat(String(set.weight)) || 0) * (parseInt(String(set.reps)) || 0);
+                                if (volume > bestVolume) {
+                                    bestVolume = volume;
+                                }
                             }
-                            return parseFloat(String(lastSet.weight));
-                        }
-                    } return null;
+                        });
+                    }
                 };
-                const subExos = (performedExo.type === 'superset' && performedExo.exercises) ? performedExo.exercises : [performedExo];
-                for (const subExo of subExos) { const w = checkExo(subExo); if (w !== null) return w; }
-            }
-        }
-        return exercise.startWeight;
+                if (exo.type === 'superset') exo.exercises.forEach(processExo);
+                else processExo(exo);
+            });
+        });
+        return Math.round(bestVolume);
     }, [history]);
 
-    return { history, saveWorkout, getExercisePR, getSuggestedWeight };
+    const getMostReps = useCallback((exerciseId) => {
+        let mostReps = 0;
+        Object.values(history).forEach(workout => {
+            if (!workout?.exercises) return;
+            workout.exercises.forEach(exo => {
+                const processExo = (subExo) => {
+                    if (subExo.id === exerciseId) {
+                        (subExo.sets || []).forEach(set => {
+                            if (set.completed) {
+                                const reps = parseInt(String(set.reps)) || 0;
+                                if (reps > mostReps) {
+                                    mostReps = reps;
+                                }
+                            }
+                        });
+                    }
+                };
+                if (exo.type === 'superset') exo.exercises.forEach(processExo);
+                else processExo(exo);
+            });
+        });
+        return mostReps;
+    }, [history]);
+
+    const getProjected1RM = useCallback((exerciseId) => {
+        let best1RM = 0;
+        Object.values(history).forEach(workout => {
+            if (!workout?.exercises) return;
+            workout.exercises.forEach(exo => {
+                const processExo = (subExo) => {
+                    if (subExo.id === exerciseId) {
+                        (subExo.sets || []).forEach(set => {
+                            if (set.completed) {
+                                const weight = parseFloat(String(set.weight)) || 0;
+                                const reps = parseInt(String(set.reps)) || 0;
+                                if (reps > 0) { // Avoid division by zero
+                                    const projectedRM = weight * (1 + reps / 30); // Epley formula
+                                    if (projectedRM > best1RM) {
+                                        best1RM = projectedRM;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                };
+                if (exo.type === 'superset') exo.exercises.forEach(processExo);
+                else processExo(exo);
+            });
+        });
+        return Math.round(best1RM);
+    }, [history]);
+    
+    const getWorkoutHistoryForExercise = useCallback((exerciseId) => {
+        const exerciseHistory = [];
+        Object.values(history).sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(workout => {
+            const date = new Date(workout.date);
+            let exerciseFound = false;
+            workout.exercises.forEach(exo => {
+                const processExo = (subExo) => {
+                    if (subExo.id === exerciseId && subExo.sets && subExo.sets.some(s => s.completed)) {
+                        exerciseHistory.push({
+                            date: date,
+                            sets: subExo.sets.filter(s => s.completed).map(s => ({
+                                weight: parseFloat(String(s.weight)) || 0,
+                                reps: parseInt(String(s.reps)) || 0,
+                                rir: parseInt(String(s.rir)) || 0
+                            }))
+                        });
+                        exerciseFound = true;
+                    }
+                };
+                if (exo.type === 'superset') exo.exercises.forEach(processExo);
+                else processExo(exo);
+            });
+        });
+        return exerciseHistory;
+    }, [history]);
+
+
+    return { history, saveWorkout, getExercisePR, getSuggestedWeight, getBestSetVolume, getMostReps, getProjected1RM, getWorkoutHistoryForExercise };
 };
 
 // --- ICONS ---
@@ -231,6 +318,9 @@ const WorkoutIcon = () => React.createElement("svg", { className: "icon", xmlns:
 const WeightIcon = () => React.createElement("svg", { className: "icon", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", strokeWidth: 1.5, stroke: "currentColor" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" }));
 const SetsIcon = () => React.createElement("svg", { className: "icon", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", strokeWidth: 1.5, stroke: "currentColor" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M3 4.5h14.25M3 9h9.75M3 13.5h5.25m5.25-.75L17.25 9m0 0L21 12.75M17.25 9v12" }));
 const ArrowPathIcon = () => React.createElement("svg", { className: "icon", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement("path", { fillRule: "evenodd", d: "M15.75 2.25a.75.75 0 0 1 .75.75v6a.75.75 0 0 1-1.5 0V4.53L8.03 11.03a.75.75 0 0 1-1.06-1.06L13.47 3.5H9a.75.75 0 0 1 0-1.5h6.75Zm-8.25 9a.75.75 0 0 0-.75-.75h-6a.75.75 0 0 0 0 1.5h4.53L-1.03 1.53a.75.75 0 1 0 1.06 1.06L6.53 9H3a.75.75 0 0 0-.75.75v6.75a.75.75 0 0 0 1.5 0v-4.53l6.47 6.47a.75.75 0 0 0 1.06-1.06L5.53 15H9.75a.75.75 0 0 0 .75-.75Z", clipRule: "evenodd" }));
+const ChevronLeftIcon = () => React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "currentColor", className: "w-6 h-6" }, React.createElement("path", { fillRule: "evenodd", d: "M7.72 12.53a.75.75 0 0 1 0-1.06l7.5-7.5a.75.75 0 1 1 1.06 1.06L9.31 12l6.97 6.97a.75.75 0 1 1-1.06 1.06l-7.5-7.5Z", clipRule: "evenodd" }));
+const TimeIcon = () => React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", strokeWidth: 1.5, stroke: "currentColor", className: "w-6 h-6" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" }));
+const PlusMinusIcon = () => React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", strokeWidth: 1.5, stroke: "currentColor", className: "w-6 h-6" }, React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", d: "M12 4.5v15m7.5-7.5h-15" }));
 
 
 // --- REUSABLE COMPONENTS ---
@@ -284,8 +374,7 @@ const ProgressionChart = ({ exerciseId, exerciseName, history }) => {
     }, [history, exerciseId]);
 
     if (dataPoints.length < 2) {
-        return React.createElement("div", { className: "stat-card" }, 
-            React.createElement("h3", null, exerciseName),
+        return React.createElement("div", { className: "progression-chart-container" },
             React.createElement("p", { className: "empty-stat-small" }, "Enregistrez au moins 2 séances pour voir la courbe.")
         );
     }
@@ -299,16 +388,17 @@ const ProgressionChart = ({ exerciseId, exerciseName, history }) => {
     
     const minWeight = Math.min(...weights);
     const maxWeight = Math.max(...weights);
+    const weightRange = maxWeight - minWeight === 0 ? 1 : maxWeight - minWeight;
     const minDate = dates[0].getTime();
     const maxDate = dates[dates.length - 1].getTime();
+    const dateRange = maxDate - minDate === 0 ? 1 : maxDate - minDate;
 
-    const getX = date => ((date.getTime() - minDate) / (maxDate - minDate)) * width;
-    const getY = weight => height - ((weight - minWeight) / (maxWeight - minWeight)) * height;
+    const getX = date => ((date.getTime() - minDate) / dateRange) * width;
+    const getY = weight => height - ((weight - minWeight) / weightRange) * height;
 
     const path = dataPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${getX(p.date)} ${getY(p.weight)}`).join(' ');
 
     const handleMouseMove = (e, dataPoint) => {
-        const containerBounds = containerRef.current.getBoundingClientRect();
         setTooltip({
             x: getX(dataPoint.date) + margin.left,
             y: getY(dataPoint.weight),
@@ -320,52 +410,85 @@ const ProgressionChart = ({ exerciseId, exerciseName, history }) => {
         setTooltip(null);
     };
 
-    return React.createElement("div", { className: "stat-card" },
-        React.createElement("h3", null, exerciseName),
-        React.createElement("div", { className: "progression-chart-container", ref: containerRef, onMouseLeave: handleMouseLeave },
-            React.createElement("svg", { className: "progression-chart-svg", viewBox: `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}` },
-                React.createElement("g", { transform: `translate(${margin.left}, ${margin.top})` },
-                    // Y-Axis
-                    Array.from({ length: 5 }).map((_, i) => {
-                        const y = height * (i / 4);
-                        const weight = maxWeight - (i / 4) * (maxWeight - minWeight);
-                        return React.createElement("g", { key: i },
-                            React.createElement("line", { className: "grid-line", x1: 0, x2: width, y1: y, y2: y }),
-                            React.createElement("text", { className: "axis-label", x: -5, y: y + 3, textAnchor: 'end' }, Math.round(weight))
-                        );
-                    }),
-                    // X-Axis
-                     Array.from({ length: 3 }).map((_, i) => {
-                        const x = width * (i / 2);
-                        const date = new Date(minDate + (i/2) * (maxDate - minDate));
-                         return React.createElement("text", { key: i, className: "axis-label", x: x, y: height + 15, textAnchor: 'middle' }, date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }));
-                    }),
-                    // Data line
-                    React.createElement("path", { className: "data-line", d: path, stroke: "url(#line-gradient-chart)" }),
-                    // Data points
-                    dataPoints.map((p, i) => React.createElement("circle", {
-                        key: i,
-                        className: "data-point",
-                        cx: getX(p.date),
-                        cy: getY(p.weight),
-                        r: 4,
-                        onMouseEnter: (e) => handleMouseMove(e, p),
-                    })),
-                     React.createElement("defs", null, React.createElement("linearGradient", { id: "line-gradient-chart", x1: "0%", y1: "0%", x2: "100%", y2: "0%" }, React.createElement("stop", { offset: "0%", stopColor: "var(--color-primary)" }), React.createElement("stop", { offset: "100%", stopColor: "var(--color-primary-light)" })))
-                )
-            ),
-            tooltip && React.createElement("div", {
-                className: "chart-tooltip visible",
-                style: { left: `${tooltip.x}px`, top: `${tooltip.y}px` }
-            }, tooltip.content)
-        )
+    return React.createElement("div", { className: "progression-chart-container", ref: containerRef, onMouseLeave: handleMouseLeave },
+        React.createElement("svg", { className: "progression-chart-svg", viewBox: `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}` },
+            React.createElement("g", { transform: `translate(${margin.left}, ${margin.top})` },
+                // Y-Axis
+                Array.from({ length: 5 }).map((_, i) => {
+                    const y = height * (i / 4);
+                    const weight = maxWeight - (i / 4) * weightRange;
+                    return React.createElement("g", { key: i },
+                        React.createElement("line", { className: "grid-line", x1: 0, x2: width, y1: y, y2: y }),
+                        React.createElement("text", { className: "axis-label", x: -5, y: y + 3, textAnchor: 'end' }, Math.round(weight))
+                    );
+                }),
+                // X-Axis
+                 Array.from({ length: 3 }).map((_, i) => {
+                    const x = width * (i / 2);
+                    const date = new Date(minDate + (i/2) * dateRange);
+                     return React.createElement("text", { key: i, className: "axis-label", x: x, y: height + 15, textAnchor: 'middle' }, date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }));
+                }),
+                React.createElement("path", { className: "data-line", d: path, stroke: "url(#line-gradient-chart)" }),
+                dataPoints.map((p, i) => React.createElement("circle", {
+                    key: i,
+                    className: "data-point",
+                    cx: getX(p.date),
+                    cy: getY(p.weight),
+                    r: 4,
+                    onMouseEnter: (e) => handleMouseMove(e, p),
+                })),
+                 React.createElement("defs", null, React.createElement("linearGradient", { id: "line-gradient-chart", x1: "0%", y1: "0%", x2: "100%", y2: "0%" }, React.createElement("stop", { offset: "0%", stopColor: "var(--color-primary)" }), React.createElement("stop", { offset: "100%", stopColor: "var(--color-primary-light)" })))
+            )
+        ),
+        tooltip && React.createElement("div", {
+            className: "chart-tooltip visible",
+            style: { left: `${tooltip.x}px`, top: `${tooltip.y}px` }
+        }, tooltip.content)
     );
 };
 
-const RestTimer = ({ duration, onFinish }) => {
+const CircularRestTimer = ({ duration, onFinish, currentExerciseName, nextSetInfo }) => {
     const [timeLeft, setTimeLeft] = useState(duration);
-    useEffect(() => { if (timeLeft <= 0) { onFinish(); return; } const i = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000); return () => clearInterval(i); }, [timeLeft, onFinish]);
-    return React.createElement("div", { className: "rest-timer-overlay" }, React.createElement("h3", null, "Repos"), React.createElement("div", { className: "rest-timer-circle" }, `${Math.floor(timeLeft/60)}:${(timeLeft%60).toString().padStart(2,'0')}`), React.createElement("button", { className: "skip-timer-btn", onClick: onFinish }, "Passer"));
+    const circumference = 2 * Math.PI * (100 - (2 * (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rest-timer-stroke-width')) || 0) / 2)); // Dynamic circumference
+    const radius = 100 - (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rest-timer-stroke-width')) || 0) / 2;
+
+    useEffect(() => {
+        if (timeLeft <= 0) {
+            onFinish();
+            return;
+        }
+        const interval = setInterval(() => {
+            setTimeLeft(t => t > 0 ? t - 1 : 0);
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [timeLeft, onFinish]);
+
+    const handleAdjustTime = (amount) => {
+        setTimeLeft(t => Math.max(0, t + amount));
+    };
+
+    const progressOffset = circumference - (timeLeft / duration) * circumference;
+
+    return React.createElement("div", { className: "rest-timer-overlay" }, 
+        React.createElement("div", { className: "timer-container" },
+            React.createElement("svg", { className: "timer-circle-svg", viewBox: "0 0 200 200" },
+                React.createElement("circle", { className: "timer-track", cx: "100", cy: "100", r: radius, strokeDasharray: circumference }),
+                React.createElement("circle", { className: "timer-progress", cx: "100", cy: "100", r: radius, strokeDasharray: circumference, strokeDashoffset: progressOffset })
+            ),
+            React.createElement("div", { className: "timer-content" },
+                React.createElement("div", { className: "timer-time" }, `${Math.floor(timeLeft / 60)}:${(timeLeft % 60).toString().padStart(2, '0')}`),
+                currentExerciseName && React.createElement("div", { className: "timer-next-exercise" }, 
+                    "Prochaine: ", React.createElement("strong", null, currentExerciseName), 
+                    nextSetInfo && ` - ${nextSetInfo}`
+                )
+            )
+        ),
+        React.createElement("div", { className: "timer-controls" },
+            React.createElement("button", { onClick: () => handleAdjustTime(-15), "aria-label": "Réduire le temps de repos de 15 secondes" }, "-15s"),
+            React.createElement("button", { onClick: () => handleAdjustTime(15), "aria-label": "Augmenter le temps de repos de 15 secondes" }, "+15s")
+        ),
+        React.createElement("button", { className: "skip-timer-btn", onClick: onFinish }, "Passer")
+    );
 };
 
 const IntensificationStep = ({ title, description, actionText, onAction, timer }) => {
@@ -507,9 +630,9 @@ const ActiveWorkoutView = ({ workout, meta, onEndWorkout, getSuggestedWeight }) 
         workout.exercises.map((exo) => {
             if (exo.type === 'superset') {
               const numSets = Math.max(...exo.exercises.map(e => e.sets));
-              return { ...exo, exercises: exo.exercises.map(subExo => ({...subExo, sets: Array.from({length: numSets}, (_,i) => ({id: `${subExo.id}-${i}`, weight: getSuggestedWeight(subExo) || '', reps: (subExo.reps || "8").toString().split('-')[0], rir: subExo.rir || 1, completed: false})) })) };
+              return { ...exo, exercises: exo.exercises.map(subExo => ({...subExo, sets: Array.from({length: numSets}, (_,i) => ({id: `${subExo.id}-${i}-${Math.random()}`, weight: getSuggestedWeight(subExo) || '', reps: (subExo.reps || "8").toString().split('-')[0], rir: subExo.rir || 1, completed: false})) })) };
             }
-            return { ...exo, sets: Array.from({ length: exo.sets }, (_, i) => ({ id: i, weight: getSuggestedWeight(exo) || '', reps: (exo.reps || "8").toString().split('-')[0], rir: exo.rir || 1, completed: false })) };
+            return { ...exo, sets: Array.from({ length: exo.sets }, (_, i) => ({ id: `${exo.id}-${i}-${Math.random()}`, weight: getSuggestedWeight(exo) || '', reps: (exo.reps || "8").toString().split('-')[0], rir: exo.rir || 1, completed: false })) };
         })
     );
     const currentExercise = workoutState[currentIndex];
@@ -562,14 +685,14 @@ const ActiveWorkoutView = ({ workout, meta, onEndWorkout, getSuggestedWeight }) 
         React.createElement(TechniqueHighlight, { exercise: currentExercise, block: currentBlock }), 
         React.createElement(SetsTracker, { exercise: currentExercise, onSetComplete: handleSetComplete, onInputChange: handleInputChange, onAddBonusSet: handleAddBonusSet, block: currentBlock, activeSetIndex: activeSetIndex }), 
         React.createElement("div", { className: "workout-navigation" }, React.createElement("button", { onClick: () => setCurrentIndex(i => i - 1), disabled: currentIndex === 0 }, "Précédent"), React.createElement("button", { onClick: () => setCurrentIndex(i => i + 1), disabled: currentIndex === workoutState.length - 1 }, "Suivant")), 
-        isResting && React.createElement(RestTimer, { duration: restTime, onFinish: () => setIsResting(false) })
+        isResting && React.createElement(CircularRestTimer, { duration: restTime, onFinish: () => setIsResting(false), currentExerciseName: currentExercise.name || (currentExercise.exercises || []).map(e => e.name).join(' + '), nextSetInfo: `Set ${activeSetIndex + 1}/${setsForActiveCheck.length}` })
     );
 };
 
 // --- NEW: Statistics Components (Hevy Inspired) ---
 
-const SegmentedControl = ({ options, selected, onChange }) => {
-    return React.createElement("div", { className: "segmented-control" },
+const SegmentedControl = ({ options, selected, onChange, className }) => {
+    return React.createElement("div", { className: `segmented-control ${className || ''}` },
         options.map(option => React.createElement("button", {
             key: option.value,
             className: selected === option.value ? 'active' : '',
@@ -685,10 +808,11 @@ const AnatomyChart = ({ history }) => {
     };
 
     return React.createElement('div', { className: 'anatomy-container' },
-        React.createElement('button', { className: 'anatomy-toggle', onClick: () => setView(v => v === 'front' ? 'back' : 'front') }, React.createElement(ArrowPathIcon)),
+        React.createElement('button', { className: 'anatomy-toggle', onClick: () => setView(v => v === 'front' ? 'back' : 'front'), "aria-label": "Basculer la vue anatomique" }, React.createElement(ArrowPathIcon)),
         React.createElement('div', { className: 'anatomy-chart' },
             React.createElement('div', { className: 'anatomy-view' },
-                React.createElement('svg', { viewBox: "0 0 200 450" },
+                React.createElement('svg', { viewBox: "0 0 200 450", role: "img", "aria-labelledby": "anatomy-chart-title" },
+                    React.createElement("title", { id: "anatomy-chart-title" }, `Muscles sollicités - vue ${view === 'front' ? 'avant' : 'arrière'}`),
                     view === 'front' ? renderPaths(frontMuscles) : renderPaths(backMuscles)
                 )
             )
@@ -703,9 +827,8 @@ const MuscleRadarChart = ({ currentStats, previousStats }) => {
     const radius = size * 0.4;
 
     const calculatePoints = (stats) => {
-        const totalSets = radarMuscles.reduce((sum, muscle) => sum + (stats[muscle] || 0), 0);
-        const maxVal = Math.max(...radarMuscles.map(m => stats[m] || 0), 1);
-        if (totalSets === 0) return new Array(radarMuscles.length).fill("0,0").join(" ");
+        const allStatsValues = [ ...Object.values(currentStats), ...Object.values(previousStats) ];
+        const maxVal = Math.max(...allStatsValues, 1);
 
         return radarMuscles.map((muscle, i) => {
             const angle = (i / radarMuscles.length) * 2 * Math.PI - Math.PI / 2;
@@ -721,8 +844,8 @@ const MuscleRadarChart = ({ currentStats, previousStats }) => {
     const previousPoints = calculatePoints(previousStats);
 
     return React.createElement("div", { className: "radar-chart-container" },
-        React.createElement("svg", { viewBox: `0 0 ${size} ${size}` },
-            // Axes and labels
+        React.createElement("svg", { viewBox: `0 0 ${size} ${size}`, role: "img", "aria-labelledby": "radar-chart-title" },
+            React.createElement("title", { id: "radar-chart-title" }, "Répartition musculaire (current vs previous)"),
             radarMuscles.map((muscle, i) => {
                 const angle = (i / radarMuscles.length) * 2 * Math.PI - Math.PI / 2;
                 const x2 = center + radius * Math.cos(angle);
@@ -734,15 +857,155 @@ const MuscleRadarChart = ({ currentStats, previousStats }) => {
                     React.createElement("text", { className: "radar-label", x: labelX, y: labelY, dy: "0.33em" }, muscle.substring(0,4))
                 );
             }),
-            // Polygons
             React.createElement("polygon", { className: "radar-polygon-previous", points: previousPoints }),
             React.createElement("polygon", { className: "radar-polygon-current", points: currentPoints })
         )
     );
 };
 
+const MuscleVolumeTrendChart = ({ history }) => {
+    const [granularity, setGranularity] = useState('week');
+    const [visibleMuscles, setVisibleMuscles] = useState(muscleGroups);
+    const [tooltip, setTooltip] = useState(null);
+    const containerRef = React.useRef(null);
+    const muscleColors = ['#0A84FF', '#30D158', '#FF9F0A', '#FF453A', '#AF52DE', '#5E5CE6', '#64D2FF', '#FFD60A', '#A2845E'];
 
-const StatisticsView = ({ getExercisePR, history }) => {
+    const toggleMuscleVisibility = (muscle) => {
+        setVisibleMuscles(current => 
+            current.includes(muscle) ? current.filter(m => m !== muscle) : [...current, muscle]
+        );
+    };
+
+    const trendData = useMemo(() => {
+        const sortedHistory = Object.values(history).sort((a, b) => new Date(a.date) - new Date(b.date));
+        if (sortedHistory.length === 0) return [];
+        
+        const dataMap = new Map();
+        
+        sortedHistory.forEach(workout => {
+            const date = new Date(workout.date);
+            let key;
+            if (granularity === 'week') {
+                const startOfWeek = new Date(date);
+                startOfWeek.setDate(date.getDate() - date.getDay());
+                key = startOfWeek.toISOString().split('T')[0];
+            } else { // month
+                key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            }
+
+            if (!dataMap.has(key)) {
+                const initialCounts = {};
+                muscleGroups.forEach(m => initialCounts[m] = 0);
+                dataMap.set(key, { date: date, ...initialCounts });
+            }
+
+            const periodData = dataMap.get(key);
+            workout.exercises.forEach(exo => {
+                const processExo = (subExo) => {
+                    if (subExo.muscles) {
+                        subExo.muscles.primary.forEach(m => {
+                            periodData[m] += (subExo.sets || []).filter(s => s.completed).length;
+                        });
+                    }
+                };
+                if (exo.type === 'superset') exo.exercises.forEach(processExo);
+                else processExo(exo);
+            });
+        });
+        return Array.from(dataMap.values());
+    }, [history, granularity]);
+    
+    if (trendData.length < 2) {
+         return React.createElement("p", { className: "empty-stat-small" }, "Pas assez de données pour afficher une tendance.");
+    }
+    
+    const margin = { top: 20, right: 20, bottom: 30, left: 35 };
+    const width = 350 - margin.left - margin.right;
+    const height = 200 - margin.top - margin.bottom;
+
+    const maxSets = Math.max(...trendData.flatMap(d => Object.values(d).slice(1)), 1);
+    const dates = trendData.map(d => d.date);
+    const minDate = dates[0].getTime();
+    const maxDate = dates[dates.length - 1].getTime();
+    const dateRange = maxDate - minDate === 0 ? 1 : maxDate - minDate;
+    
+    const getX = date => ((date.getTime() - minDate) / dateRange) * width;
+    const getY = sets => height - ((sets / maxSets) * height);
+    
+    const handleMouseMove = (e) => {
+        const svg = containerRef.current.querySelector('svg');
+        const pt = svg.createSVGPoint();
+        pt.x = e.clientX;
+        pt.y = e.clientY;
+        const cursorPoint = pt.matrixTransform(svg.getScreenCTM().inverse());
+        
+        const xPos = cursorPoint.x - margin.left;
+        const closestPoint = trendData.reduce((prev, curr) => 
+            Math.abs(getX(curr.date) - xPos) < Math.abs(getX(prev.date) - xPos) ? curr : prev
+        );
+        
+        setTooltip({
+            x: getX(closestPoint.date) + margin.left,
+            y: e.nativeEvent.offsetY - 20,
+            content: closestPoint
+        });
+    };
+    
+    const handleMouseLeave = () => setTooltip(null);
+    
+    return React.createElement("div", null,
+        React.createElement("div", { className: "progression-chart-container", ref: containerRef, onMouseLeave: handleMouseLeave },
+             React.createElement("svg", { className: "progression-chart-svg", viewBox: `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`, onMouseMove: handleMouseMove, role: "img", "aria-labelledby": "volume-trend-chart-title" },
+                React.createElement("title", { id: "volume-trend-chart-title" }, "Évolution du volume musculaire par " + granularity),
+                React.createElement("g", { transform: `translate(${margin.left}, ${margin.top})` },
+                    // Axes and Grid
+                    Array.from({ length: 5 }).map((_, i) => {
+                        const y = height * (i / 4);
+                        return React.createElement("line", { key: i, className: "grid-line", x1: 0, x2: width, y1: y, y2: y });
+                    }),
+                    React.createElement("text", { className: "axis-label", x: -5, y: -5, textAnchor: 'end' }, maxSets),
+                    React.createElement("text", { className: "axis-label", x: -5, y: height + 3, textAnchor: 'end' }, 0),
+                    // Data lines
+                    muscleGroups.map((muscle, i) => {
+                        if (!visibleMuscles.includes(muscle)) return null;
+                        const path = trendData.map((p, j) => `${j === 0 ? 'M' : 'L'} ${getX(p.date)} ${getY(p[muscle])}`).join(' ');
+                        return React.createElement("path", { key: muscle, className: "data-line", d: path, stroke: muscleColors[i] });
+                    }),
+                    // Tooltip line
+                    tooltip && React.createElement("line", { stroke: "var(--color-text-secondary)", strokeWidth: "1", strokeDasharray: "3 3", x1: tooltip.x - margin.left, y1: 0, x2: tooltip.x - margin.left, y2: height })
+                )
+             ),
+             tooltip && React.createElement("div", { className: "chart-tooltip visible", style: { left: `${tooltip.x}px`, top: `${tooltip.y}px` } },
+                React.createElement("strong", null, tooltip.content.date.toLocaleDateString('fr-FR')),
+                Object.entries(tooltip.content).filter(([key]) => key !== 'date' && visibleMuscles.includes(key)).map(([key, value]) => 
+                    React.createElement("div", {key: key}, `${key}: ${value}`)
+                )
+             )
+        ),
+        React.createElement("div", { className: "stat-card-header" },
+            React.createElement("h3", null, "Volume par Muscle"),
+            React.createElement(SegmentedControl, {
+                options: [{ label: 'Semaine', value: 'week' }, { label: 'Mois', value: 'month' }],
+                selected: granularity,
+                onChange: setGranularity,
+                className: 'granularity-filter'
+            })
+        ),
+        React.createElement("div", { className: "muscle-trend-legend" },
+            muscleGroups.map((muscle, i) => React.createElement("div", {
+                key: muscle,
+                className: `legend-item ${visibleMuscles.includes(muscle) ? '' : 'inactive'}`,
+                onClick: () => toggleMuscleVisibility(muscle)
+            },
+                React.createElement("div", { className: "legend-color-dot", style: { backgroundColor: muscleColors[i] } }),
+                muscle
+            ))
+        )
+    );
+};
+
+
+const StatisticsView = ({ onSelectExercise, getExercisePR, history }) => {
     const [timeFilter, setTimeFilter] = useState('30d');
     const hasHistory = Object.keys(history).length > 0;
 
@@ -758,15 +1021,14 @@ const StatisticsView = ({ getExercisePR, history }) => {
                 stats.totalWorkouts++;
                 (workout.exercises || []).forEach(exo => {
                     const processExo = (subExo) => {
-                        (subExo.sets || []).forEach(set => {
-                            if (set.completed) {
-                                stats.totalSets++;
-                                stats.totalVolume += (parseFloat(String(set.weight)) || 0) * (parseInt(String(set.reps)) || 0);
-                            }
+                        const completedSets = (subExo.sets || []).filter(s => s.completed);
+                        completedSets.forEach(set => {
+                            stats.totalSets++;
+                            stats.totalVolume += (parseFloat(String(set.weight)) || 0) * (parseInt(String(set.reps)) || 0);
                         });
                         if (subExo.muscles) {
                             (subExo.muscles.primary || []).forEach(m => {
-                                stats.muscleDistribution[m] = (stats.muscleDistribution[m] || 0) + (subExo.sets || []).filter(s => s.completed).length
+                                stats.muscleDistribution[m] = (stats.muscleDistribution[m] || 0) + completedSets.length;
                             });
                         }
                     };
@@ -814,7 +1076,8 @@ const StatisticsView = ({ getExercisePR, history }) => {
                 { label: 'Tout', value: 'all' }
             ],
             selected: timeFilter,
-            onChange: setTimeFilter
+            onChange: setTimeFilter,
+            className: 'main-filter'
         }),
         React.createElement("div", { className: "stats-dashboard" },
             React.createElement("div", { className: "stat-card" },
@@ -827,17 +1090,108 @@ const StatisticsView = ({ getExercisePR, history }) => {
                 React.createElement(AnatomyChart, { history: history })
             ),
             React.createElement("div", { className: "stat-card" },
-                React.createElement("h3", null, "Répartition Musculaire"),
-                React.createElement(MuscleRadarChart, { currentStats: currentPeriodStats.muscleDistribution, previousStats: previousPeriodStats.muscleDistribution })
+                 React.createElement("h3", null, "Répartition Musculaire"),
+                 React.createElement(MuscleRadarChart, { currentStats: currentPeriodStats.muscleDistribution, previousStats: previousPeriodStats.muscleDistribution })
+            ),
+             React.createElement("div", { className: "stat-card" },
+                React.createElement(MuscleVolumeTrendChart, { history: Object.values(history) })
             ),
             React.createElement("div", { className: "stat-card" },
                  React.createElement("h3", null, "Progression des Charges"),
-                 programData.stats.projections.map(exo => React.createElement(ProgressionChart, { key: exo.id, exerciseId: exo.id, exerciseName: exo.name, history: history }))
+                 programData.stats.projections.map(exo => 
+                    React.createElement("div", { 
+                        key: exo.id, 
+                        className: "stat-card clickable", 
+                        onClick: () => onSelectExercise(exo.id) 
+                    },
+                        React.createElement("h4", null, exo.name),
+                        React.createElement(ProgressionChart, { exerciseId: exo.id, exerciseName: exo.name, history: history })
+                    )
+                )
             )
         )
       )
     );
 };
+
+const PRCard = ({ label, value, unit }) => {
+    return React.createElement("div", { className: "pr-card" },
+        React.createElement("div", { className: "pr-value" }, value, " ", unit),
+        React.createElement("div", { className: "pr-label" }, label)
+    );
+};
+
+const ExerciseHistoryList = ({ exerciseHistory }) => {
+    if (!exerciseHistory || exerciseHistory.length === 0) {
+        return React.createElement("p", { className: "empty-stat-small" }, "Aucun historique trouvé pour cet exercice.");
+    }
+
+    return React.createElement("div", { className: "exercise-history-list" },
+        exerciseHistory.map((workoutEntry, index) =>
+            React.createElement("div", { className: "history-workout-item", key: index },
+                React.createElement("div", { className: "date" }, workoutEntry.date.toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })),
+                workoutEntry.sets.map((set, setIndex) =>
+                    React.createElement("div", { className: "history-set-item", key: setIndex },
+                        React.createElement("span", { className: "set-details" }, `${set.weight} kg x ${set.reps}`),
+                        React.createElement("span", { className: "rir" }, `RIR ${set.rir}`)
+                    )
+                )
+            )
+        )
+    );
+};
+
+const ExerciseDetailView = ({ exerciseId, onBack, history, getExercisePR, getBestSetVolume, getMostReps, getProjected1RM, getWorkoutHistoryForExercise }) => {
+    const [activeTab, setActiveTab] = useState('summary');
+
+    const exercise = useMemo(() => {
+        // Find the exercise details from programData.workouts
+        for (const day in programData.workouts) {
+            for (const exo of programData.workouts[day].exercises) {
+                if (exo.type === 'superset') {
+                    const subExo = exo.exercises.find(e => e.id === exerciseId);
+                    if (subExo) return subExo;
+                } else if (exo.id === exerciseId) {
+                    return exo;
+                }
+            }
+        }
+        return null;
+    }, [exerciseId]);
+
+    const exerciseName = exercise ? exercise.name : 'Exercice Inconnu';
+    const exerciseHistory = useMemo(() => getWorkoutHistoryForExercise(exerciseId), [exerciseId, getWorkoutHistoryForExercise]);
+
+    return React.createElement("div", { className: "exercise-detail-view" },
+        React.createElement("div", { className: "detail-header" },
+            React.createElement("button", { className: "back-btn", onClick: onBack, "aria-label": "Retour au tableau de bord" }, React.createElement(ChevronLeftIcon)),
+            React.createElement("h2", { className: "detail-title" }, exerciseName)
+        ),
+        React.createElement("div", { className: "detail-tabs" },
+            React.createElement("button", { className: `detail-tab ${activeTab === 'summary' ? 'active' : ''}`, onClick: () => setActiveTab('summary') }, "Résumé"),
+            React.createElement("button", { className: `detail-tab ${activeTab === 'history' ? 'active' : ''}`, onClick: () => setActiveTab('history') }, "Historique")
+        ),
+        React.createElement("div", { className: "detail-content" },
+            activeTab === 'summary' && React.createElement(React.Fragment, null,
+                React.createElement("div", { className: "stat-card" },
+                    React.createElement("h3", null, "Progression des Charges"),
+                    React.createElement(ProgressionChart, { exerciseId: exerciseId, exerciseName: exerciseName, history: history })
+                ),
+                React.createElement("div", { className: "pr-section" },
+                    React.createElement("h3", null, "Records Personnels"),
+                    React.createElement("div", { className: "pr-grid" },
+                        React.createElement(PRCard, { label: "Poids le + Lourd", value: getExercisePR(exerciseId).weight, unit: "kg" }),
+                        React.createElement(PRCard, { label: "1RM Projeté", value: getProjected1RM(exerciseId), unit: "kg" }),
+                        React.createElement(PRCard, { label: "Meilleure Série", value: getBestSetVolume(exerciseId), unit: "kg" }),
+                        React.createElement(PRCard, { label: "+ de Répétitions", value: getMostReps(exerciseId), unit: "reps" })
+                    )
+                )
+            ),
+            activeTab === 'history' && React.createElement(ExerciseHistoryList, { exerciseHistory: exerciseHistory })
+        )
+    );
+};
+
 
 const ExerciseCard = ({ exercise }) => {
     if (exercise.type === 'superset') {
@@ -884,9 +1238,9 @@ const WorkoutPlannerView = ({ onStartWorkout }) => {
   return (
     React.createElement("div", { className: "main-content" },
       React.createElement("header", { className: "header" }, React.createElement("h1", null, "Programme d'Entraînement")),
-      React.createElement("div", { className: "week-navigator" }, React.createElement("button", { onClick: () => setCurrentWeek(w => Math.max(1, w - 1)), disabled: currentWeek === 1 }, "<"), React.createElement("div", { className: "week-display" }, "Semaine ", currentWeek), React.createElement("button", { onClick: () => setCurrentWeek(w => Math.min(26, w + 1)), disabled: currentWeek === 26 }, ">")),
+      React.createElement("div", { className: "week-navigator" }, React.createElement("button", { onClick: () => setCurrentWeek(w => Math.max(1, w - 1)), disabled: currentWeek === 1, "aria-label": "Semaine précédente" }, "<"), React.createElement("div", { className: "week-display" }, "Semaine ", currentWeek), React.createElement("button", { onClick: () => setCurrentWeek(w => Math.min(26, w + 1)), disabled: currentWeek === 26, "aria-label": "Semaine suivante" }, ">")),
       React.createElement("div", { className: "block-info" }, React.createElement("h3", null, currentBlock.name), React.createElement("p", null, React.createElement("strong", null, "Technique :"), " ", currentBlock.technique.desc)),
-      React.createElement("div", { className: "tabs" }, ['dimanche', 'mardi', 'jeudi', 'vendredi'].map(day => React.createElement("button", { key: day, className: `tab ${activeDay === day ? 'active' : ''}`, onClick: () => setActiveDay(day) }, day.charAt(0).toUpperCase() + day.slice(1)))),
+      React.createElement("div", { className: "tabs" }, ['dimanche', 'mardi', 'jeudi', 'vendredi'].map(day => React.createElement("button", { key: day, className: `tab ${activeDay === day ? 'active' : ''}`, onClick: () => setActiveDay(day), "aria-selected": activeDay === day }, day.charAt(0).toUpperCase() + day.slice(1)))),
       React.createElement(MuscleGroupHeatmap, { workout: gymWorkout || (homeWorkout ? { exercises: [homeWorkout] } : null) }),
       React.createElement("div", { className: "workout-overview" },
         gymWorkout && React.createElement(React.Fragment, null, 
@@ -909,7 +1263,9 @@ const BottomNav = ({ currentView, setView }) => (
 const App = () => {
   const [currentView, setCurrentView] = useState('stats');
   const [activeWorkout, setActiveWorkout] = useState(null);
-  const { history, saveWorkout, getExercisePR, getSuggestedWeight } = useWorkoutHistory();
+  const [selectedExerciseId, setSelectedExerciseId] = useState(null); // New state for exercise detail view
+
+  const { history, saveWorkout, getExercisePR, getSuggestedWeight, getBestSetVolume, getMostReps, getProjected1RM, getWorkoutHistoryForExercise } = useWorkoutHistory();
   
   const handleStartWorkout = (workout, week, day, isHomeWorkout = false) => { setActiveWorkout({ workout, meta: { week, day, isHomeWorkout }, startTime: Date.now() }); };
   const handleEndWorkout = (completedWorkout) => {
@@ -923,24 +1279,50 @@ const App = () => {
     setActiveWorkout(null);
   };
 
+  const handleSelectExercise = (id) => {
+      setSelectedExerciseId(id);
+  };
+
+  const handleDeselectExercise = () => {
+      setSelectedExerciseId(null);
+  };
+
   const renderContent = () => {
     if (activeWorkout) {
-        return React.createElement(ActiveWorkoutView, { key: activeWorkout.startTime, workout: activeWorkout.workout, meta: activeWorkout.meta, onEndWorkout: handleEndWorkout, getSuggestedWeight: getSuggestedWeight });
+        return React.createElement(ActiveWorkoutView, { 
+            key: activeWorkout.startTime, 
+            workout: activeWorkout.workout, 
+            meta: activeWorkout.meta, 
+            onEndWorkout: handleEndWorkout, 
+            getSuggestedWeight: getSuggestedWeight 
+        });
+    }
+    if (selectedExerciseId) {
+        return React.createElement(ExerciseDetailView, {
+            exerciseId: selectedExerciseId,
+            onBack: handleDeselectExercise,
+            history: history,
+            getExercisePR: getExercisePR,
+            getBestSetVolume: getBestSetVolume,
+            getMostReps: getMostReps,
+            getProjected1RM: getProjected1RM,
+            getWorkoutHistoryForExercise: getWorkoutHistoryForExercise
+        });
     }
     switch (currentView) {
       case 'program':
         return React.createElement(WorkoutPlannerView, { onStartWorkout: handleStartWorkout });
       case 'stats':
-        return React.createElement(StatisticsView, { getExercisePR: getExercisePR, history: history });
+        return React.createElement(StatisticsView, { onSelectExercise: handleSelectExercise, getExercisePR: getExercisePR, history: history });
       default:
-        return React.createElement(StatisticsView, { getExercisePR: getExercisePR, history: history });
+        return React.createElement(StatisticsView, { onSelectExercise: handleSelectExercise, getExercisePR: getExercisePR, history: history });
     }
   };
 
   return (
     React.createElement("div", { className: "app-container" },
       renderContent(),
-      !activeWorkout && React.createElement(BottomNav, { currentView: currentView, setView: setCurrentView })
+      !activeWorkout && !selectedExerciseId && React.createElement(BottomNav, { currentView: currentView, setView: setCurrentView })
     )
   );
 };
